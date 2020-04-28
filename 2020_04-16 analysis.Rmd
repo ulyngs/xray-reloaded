@@ -6,6 +6,10 @@ editor_options:
 ---
 
 ```{r setup, include=FALSE}
+# -- OPTIONS --
+version = '2017' # select the dataset you want to use
+pairsOnly = TRUE # only include apps that exist in both datasets
+
 library(tidyverse)
 library(jsonlite)
 library(ineq)
@@ -39,21 +43,42 @@ company_info <- fromJSON("data/company_data_list_9_4_2018.json") %>%
 # read in our mapping of genres to super genres
 genre_grouping <- read_csv("data/genre_grouping.csv") %>% select(-numApps)
 
-# read in the apps and add the genre grouping
-apps <- read_csv("data/apps.csv") %>%
-  left_join(genre_grouping)
+# a file containing a mapping between 2017 and 2020 ids
+# this is also used to restrict the data to pairs only
+mapping <- read_csv("data/mapping.csv")
 
-#apps <- read_csv("data/2017_study/appInfo.csv") %>%  # if you want to do the 2017 one
-#  left_join(genre_grouping)
-
-# read in the hosts mapped to company
-# NOTE: This assumes that you've already run used the code in the next section to do the mapping
-hosts <- vroom("data_processed/appsWithHostsAndCompaniesLong.csv")
-
-# if you want to run this with the 2017 data, then note that 'unknown' was in title case
-# so change it to lower case to get code to run correctly
-hosts <- vroom("data/2017_study/appsWithHostsAndCompaniesLong.csv") %>% 
-  mutate(company = ifelse(company == "Unknown", "unknown", company))
+if (version == '2017') {
+  # read in the apps and add the genre grouping
+  apps <- read_csv("data/2017_study/appInfo.csv") %>% 
+    left_join(genre_grouping)
+  
+  # with the 2017 data, then note that 'unknown' was in title case
+  # so change it to lower case to get code to run correctly
+  hosts <- vroom("data/2017_study/appsWithHostsAndCompaniesLong.csv") %>% 
+    mutate(company = ifelse(company == "Unknown", "unknown", company))
+  
+  if (pairsOnly) {
+    apps <- apps %>% 
+     filter(id %in% mapping$id2017)
+    hosts <- hosts%>%
+     filter(id %in% mapping$id2017)
+  }
+} else {
+  # read in the apps and add the genre grouping
+  apps <- read_csv("data/apps.csv") %>%
+    left_join(genre_grouping)
+  
+  # read in the hosts mapped to company
+  # NOTE: This assumes that you've already run used the code in the next section to do the mapping
+  hosts <- vroom("data_processed/appsWithHostsAndCompaniesLong.csv")
+  
+  if (pairsOnly) {
+    apps <- apps %>% 
+     filter(id %in% mapping$id2020)
+    hosts <- hosts%>%
+     filter(id %in% mapping$id2020)
+  }
+}
 
 ```
 
@@ -89,6 +114,11 @@ company_domains <- company_domains %>%
   mutate(regex = str_c("(^|\\.)", regex, "([^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\\.]?)")) #domain either starts here or is preceded by dot; does not end in alphabetic character or dot
 
 #then do the matching - WARNING! WITH HUNDREDS OF THOUSANDS OF APPS, THIS TAKES HOURS
+
+uniqueHosts = hosts[!duplicated(hosts$hosts), ]
+hostsTmp = hosts
+hosts = uniqueHosts
+
 for (i in 1:nrow(company_domains)) {
   #print(paste("checking domain", company_domains[[i,"domains"]], "with regex", company_domains[[i,"regex"]]))
   hosts <- hosts %>%
@@ -100,6 +130,9 @@ for (i in 1:nrow(company_domains)) {
                             company))
   print(paste(i, "out of", nrow(company_domains), "complete"))
 }
+
+lookup <- data.frame(company = hosts$company, row.names = hosts$hosts)
+hosts <- hostsTmp %>%  mutate(company = lookup[hosts, ])
 
 write_csv(hosts, "data_processed/appsWithHostsAndCompaniesLong.csv")
 
