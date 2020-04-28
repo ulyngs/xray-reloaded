@@ -89,6 +89,11 @@ company_domains <- company_domains %>%
   mutate(regex = str_c("(^|\\.)", regex, "([^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\\.]?)")) #domain either starts here or is preceded by dot; does not end in alphabetic character or dot
 
 #then do the matching - WARNING! WITH HUNDREDS OF THOUSANDS OF APPS, THIS TAKES HOURS
+
+uniqueHosts = hosts[!duplicated(hosts$hosts), ]
+hostsTmp = hosts
+hosts = uniqueHosts
+
 for (i in 1:nrow(company_domains)) {
   #print(paste("checking domain", company_domains[[i,"domains"]], "with regex", company_domains[[i,"regex"]]))
   hosts <- hosts %>%
@@ -100,6 +105,9 @@ for (i in 1:nrow(company_domains)) {
                             company))
   print(paste(i, "out of", nrow(company_domains), "complete"))
 }
+
+lookup <- data.frame(company = hosts$company, row.names = hosts$hosts)
+hosts <- hostsTmp %>%  mutate(company = lookup[hosts, ])
 
 write_csv(hosts, "data_processed/appsWithHostsAndCompaniesLong.csv")
 
