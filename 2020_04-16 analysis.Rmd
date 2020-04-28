@@ -8,7 +8,7 @@ editor_options:
 ```{r setup, include=FALSE}
 # -- OPTIONS --
 version = '2017' # select the dataset you want to use
-pairsOnly = TRUE # only include apps that exist in both datasets
+pairsOnly = FALSE # only include apps that exist in both datasets
 
 library(tidyverse)
 library(jsonlite)
@@ -45,11 +45,11 @@ genre_grouping <- read_csv("data/genre_grouping.csv") %>% select(-numApps)
 
 # a file containing a mapping between 2017 and 2020 ids
 # this is also used to restrict the data to pairs only
-mapping <- read_csv("data/mapping.csv")
+mapping <- vroom("data/mapping.csv")
 
 if (version == '2017') {
   # read in the apps and add the genre grouping
-  apps <- read_csv("data/2017_study/appInfo.csv") %>% 
+  apps <- vroom("data/2017_study/appInfo.csv") %>% 
     left_join(genre_grouping)
   
   # with the 2017 data, then note that 'unknown' was in title case
@@ -65,7 +65,7 @@ if (version == '2017') {
   }
 } else {
   # read in the apps and add the genre grouping
-  apps <- read_csv("data/apps.csv") %>%
+  apps <- vroom("data/apps.csv") %>%
     left_join(genre_grouping)
   
   # read in the hosts mapped to company
