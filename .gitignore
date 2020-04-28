@@ -1,0 +1,12 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.DS_Store
+2020_04-16-analysis.html
+exists_1st_10000.csv
+exists_2nd_100000.csv
+xray2020_2017coverage.csv
+death_checker.Rmd
+data_processed/appsWithHostsAndCompaniesLong.csv
+data/2017_study

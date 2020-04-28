@@ -1,0 +1,639 @@
+---
+title: "Xray analysis"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(jsonlite)
+library(ineq)
+library(scales)
+library(vroom)
+
+#create function to calculate modal value
+mode_func <- function(x) {
+  ux <- unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+
+dir.create("results/company_analysis")
+dir.create("results/country_analysis")
+dir.create("results/host_analysis")
+
+```
+
+
+# Initial wrangling
+## Read in data
+```{r}
+# read in the company information
+company_info <- fromJSON("data/company_data_list_9_4_2018.json") %>%
+  as_tibble() %>%
+  rename(company = owner_name) %>%
+  select(company, country, root_parent) %>%
+  mutate(country = str_to_upper(country)) %>%
+  mutate(leaf_parent = ifelse(is.na(root_parent) | root_parent == "", company, root_parent))
+
+# read in our mapping of genres to super genres
+genre_grouping <- read_csv("data/genre_grouping.csv") %>% select(-numApps)
+
+# read in the apps and add the genre grouping
+apps <- read_csv("data/apps.csv") %>%
+  left_join(genre_grouping)
+
+#apps <- read_csv("data/2017_study/appInfo.csv") %>%  # if you want to do the 2017 one
+#  left_join(genre_grouping)
+
+# read in the hosts mapped to company
+# NOTE: This assumes that you've already run used the code in the next section to do the mapping
+hosts <- vroom("data_processed/appsWithHostsAndCompaniesLong.csv")
+
+# if you want to run this with the 2017 data, then note that 'unknown' was in title case
+# so change it to lower case to get code to run correctly
+hosts <- vroom("data/2017_study/appsWithHostsAndCompaniesLong.csv") %>% 
+  mutate(company = ifelse(company == "Unknown", "unknown", company))
+
+```
+
+
+## Map hosts to companies
+The code below will iterate over each of the domains that we have associated with a tracker company in the JSON file with company domains, and search for a match in the domains our analyser has identified within the apps.
+
+It will save out a CSV file called appsWithHostsAndCompaniesLong with three columns: app id, domains ('hosts'), and company. 
+Each row represents one domain identified in an app, so each app has as many rows in there as it has domains.
+The company column is 'unknown' if the domain has no match in our JSON of tracker domains.
+
+Note that the chunk option `eval=FALSE` means that this chunk will not be evaluated if you knit this document.
+That is because this mapping takes a long time - if you do the full mapping with ~1m apps, then it'll take something like 6-10 hours on a high-end laptop.
+There's probably an efficient way to do this as a simple left-join, but the current implementation is an iterative search which is probably less error-prone.
+
+
+```{r, eval=FALSE}
+hosts <- read_csv("data/hosts.csv") %>% 
+  mutate(company = "unknown")
+
+#unnest hosts in company info and arrange by length, so that we start with the longest domain names when doing the mapping
+company_domains <- fromJSON("data/company_data_list_9_4_2018.json") %>%
+  as_tibble() %>%
+  rename(domains = doms) %>% 
+  select(owner_name, domains) %>%
+  unnest(domains) %>%
+  filter(domains != "") %>% #exclude the ones with no domains
+  arrange(desc(str_length(domains)))
+
+#add column where domain is its corresponding regular expression
+company_domains <- company_domains %>%
+  mutate(regex = str_replace(domains, "\\.", "\\\\.")) %>% #make the dot into a regex
+  mutate(regex = str_c("(^|\\.)", regex, "([^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\\.]?)")) #domain either starts here or is preceded by dot; does not end in alphabetic character or dot
+
+#then do the matching - WARNING! WITH HUNDREDS OF THOUSANDS OF APPS, THIS TAKES HOURS
+for (i in 1:nrow(company_domains)) {
+  #print(paste("checking domain", company_domains[[i,"domains"]], "with regex", company_domains[[i,"regex"]]))
+  hosts <- hosts %>%
+    mutate(company = ifelse(company == "unknown",
+                            replace(company,
+                                    str_detect(hosts, company_domains[[i,"regex"]]),
+                                    company_domains[[i,"owner_name"]]
+                            ),
+                            company))
+  print(paste(i, "out of", nrow(company_domains), "complete"))
+}
+
+write_csv(hosts, "data_processed/appsWithHostsAndCompaniesLong.csv")
+
+```
+
+## Join data together
+```{r}
+nested_hosts <- hosts %>% 
+  nest(data = c(hosts, company)) %>% 
+  rename(hosts_and_company = data) %>%
+  mutate(num_hosts = map_int(hosts_and_company, nrow))
+
+all_apps_w_info_and_host_count <- apps %>% 
+  left_join(nested_hosts) %>% 
+  mutate(num_hosts = ifelse(is.na(num_hosts), 0, num_hosts))
+
+```
+
+
+# Main analysis
+## How many hosts are in apps?
+```{r}
+# plot it
+all_apps_w_info_and_host_count %>% 
+  ggplot() +
+    geom_histogram(aes(num_hosts))
+
+# plot it w/ log scale
+all_apps_w_info_and_host_count %>% 
+  ggplot() +
+    geom_histogram(aes(num_hosts)) +
+    scale_y_log10()
+
+# get summary statistics
+all_apps_w_info_and_host_count %>% 
+  summarise(mean(num_hosts),
+            median(num_hosts),
+            mode_func(num_hosts),
+            min(num_hosts),
+            max(num_hosts),
+            Q1 = quantile(num_hosts, .25),
+            Q3 = quantile(num_hosts, .75),
+            IQR = IQR(num_hosts))
+```
+
+
+## Summary statistics of hosts / domains that are associated with tracker companies
+```{r}
+# count tracker hosts
+num_tracker_hosts <- hosts %>% 
+  filter(company != "unknown") %>% 
+  group_by(id) %>% 
+  summarise(num_tracker_hosts = n()) %>%
+  arrange(desc(num_tracker_hosts))
+
+# set count to 0 for apps that don't have any domains associated with tracker companies
+apps_w_no_known_trackers <- apps %>%
+  select(id) %>% 
+  anti_join(num_tracker_hosts, by = "id") %>% 
+  mutate(num_tracker_hosts = 0)
+
+# put together in common data frame
+count_tracker_hosts <- num_tracker_hosts %>% 
+  bind_rows(apps_w_no_known_trackers)
+
+# calculate summary statistics
+summary_tracker_hosts <- count_tracker_hosts %>%
+  summarise(num_apps = n(),
+            median = median(num_tracker_hosts),
+            Q1 = quantile(num_tracker_hosts, .25),
+            Q3 = quantile(num_tracker_hosts, .75),
+            IQR = IQR(num_tracker_hosts),
+            min = min(num_tracker_hosts),
+            max = max(num_tracker_hosts),
+            mode = mode_func(num_tracker_hosts),
+            mean = round(mean(num_tracker_hosts),1),
+            SD = round(sd(num_tracker_hosts),2),
+            num_more_than_20 = sum(num_tracker_hosts > 20),
+            pct_more_than_20 = round((num_more_than_20 / num_apps) * 100,2),
+            no_refs = sum(num_tracker_hosts == 0),
+            pct_none = round((no_refs / num_apps) * 100,2)) %>%
+  select(-num_more_than_20, -no_refs)
+
+#write_csv(summary_tracker_hosts, "results/host_analysis/summary_tracker_hosts_per_app.csv")
+```
+
+Great, now let's also get lorenz curve gini coefficient
+
+```{r}
+
+plot(Lc(count_tracker_hosts$num_tracker_hosts), col = 'red', lwd=2, 
+     xlab = "Cumulative proportion of apps",
+     ylab = "Cumulative proportion of tracker references")
+ineq(count_tracker_hosts$num_tracker_hosts, type='Gini')
+
+#plot the distribution in a histogram
+count_tracker_hosts %>%
+  #filter(num_tracker_hosts < 65) %>%
+  ggplot() +
+  geom_histogram(aes(num_tracker_hosts), bins = 65) +
+  labs(x = "Number of tracker hosts per app", y = "Number of apps")
+
+```
+
+
+## Most frequent hosts
+```{r}
+#create short mapping from hosts to companies
+hosts_to_company <- hosts %>%
+  select(-id) %>%
+  distinct(hosts, company)
+
+#create summary of tracker hosts and save out top 250
+known_trackers_info <- hosts %>%
+  filter(company != "unknown") %>%
+  group_by(hosts) %>% 
+  summarise(num_apps_present = n(),
+            pct_apps_present = round((num_apps_present/nrow(apps))*100,2)) %>% 
+  left_join(hosts_to_company, by = "hosts") %>% 
+  left_join(company_info, by = "company") %>%
+  arrange(desc(num_apps_present))
+
+head(known_trackers_info, 250) %>%
+  select(-leaf_parent) %>%
+  write_csv("results/host_analysis/top_250_tracker_hosts.csv")
+
+#create summary of 'unknown' hosts (i.e. not on our tracker list) and save out top 250
+unknown_hosts_info <- hosts %>%
+  filter(company == "unknown") %>%
+  group_by(hosts) %>%
+  summarise(num_apps_present = n(),
+            pct_apps_present = round((num_apps_present/nrow(apps))*100,2)) %>%
+  arrange(desc(num_apps_present))
+
+head(unknown_hosts_info, 250) %>%
+  write_csv("results/host_analysis/top_250_unknown_hosts.csv")
+```
+
+
+## Distinct companies per app
+```{r}
+#count number of distinct companies in apps that include hosts that are on our tracker list
+company_counts_in_apps_w_known_trackers <- hosts %>%
+  filter(company != "unknown") %>%
+  group_by(id) %>%
+  distinct(company) %>%
+  summarise(num_companies = n())
+
+#set number of companies to 0 for the remaining apps
+apps_w_no_known_tracker_hosts <- apps %>%
+  select(id) %>% 
+  anti_join(company_counts_in_apps_w_known_trackers, by = "id") %>% 
+  mutate(num_companies = 0)
+
+# join the two
+count_tracker_companies <- company_counts_in_apps_w_known_trackers %>% 
+  bind_rows(apps_w_no_known_tracker_hosts)
+```
+Ok, now we can calculate summary statistics
+
+```{r}
+#calculate summary statistics of distinct tracker companies per app
+summary_company_count <- count_tracker_companies %>%
+  summarise(num_apps = n(),
+            median = median(num_companies),
+            Q1 = quantile(num_companies, .25),
+            Q3 = quantile(num_companies, .75),
+            mode = mode_func(num_companies),
+            min = min(num_companies),
+            max = max(num_companies),
+            IQR = IQR(num_companies),
+            mean_companies = round(mean(num_companies),1),
+            SD = round(sd(num_companies),2),
+            num_more_than_10 = sum(num_companies > 10),
+            pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
+            no_refs = sum(num_companies == 0),
+            pct_none = round((no_refs / num_apps) * 100,2)) %>%
+  select(-num_more_than_10, -no_refs)
+
+#write_csv(summary_company_count, "results/company_analysis/summary_company_count.csv")
+```
+
+Explore inequality
+
+```{r}
+#draw Lorenz curve and get Gini coefficient
+plot(Lc(count_tracker_companies$num_companies), col = 'red', lwd=2, xlab = "Cumulative proportion of apps",
+     ylab = "Cumulative proportion of company references")
+ineq(count_tracker_companies$num_companies, type='Gini')
+
+#plot the distribution in a histogram
+count_tracker_companies %>%
+  ggplot() +
+  geom_histogram(aes(num_companies)) +
+  labs(x = "Number of distinct companies per app", y = "Number of apps")
+
+#ggsave("plots/histTrackerCompaniesPerApp.png",width=5, height=4, dpi=600)
+
+#explore extreme outliers
+# count_tracker_companies %>%
+#  filter(num_companies > 27) %>%
+#  left_join(apps) %>%
+#  write_csv("results/outliers/extreme_outliers_NumCompanies.csv")
+
+```
+
+
+## Presence of specific tracker companies in apps
+```{r}
+#calculate how many percent of apps each company (immediate owner) is present in
+prop_apps_w_tracking_company_refs <- hosts %>%
+  group_by(id) %>%
+  distinct(company) %>% #exclude the distinct refs within each group
+  ungroup() %>% 
+  filter(company != "unknown") %>% 
+  count(company) %>% #then count how many times a company occurs
+  mutate(pct_of_apps = (n / nrow(apps))*100) %>%
+  arrange(desc(n)) %>%
+  left_join(company_info, by = "company")
+
+#calculate how many percent of apps each root company is present in
+prevalence_of_root_companies <- hosts %>%
+  filter(company != "unknown") %>%
+  left_join(company_info, by = "company") %>%
+  distinct(id, leaf_parent) %>%
+  count(leaf_parent) %>%
+  mutate(pct_of_apps = (n / nrow(apps))*100) %>%
+  arrange(desc(n))
+
+#combine the two
+prevalence_owners_and_subsidiaries <- prevalence_of_root_companies %>%
+  left_join(prop_apps_w_tracking_company_refs, by = "leaf_parent") %>%
+  select(-root_parent) %>% 
+  rename(pct_of_apps_leaf_parent = pct_of_apps.x,
+         pct_of_apps_leaf_company = pct_of_apps.y)
+
+write_csv(prevalence_owners_and_subsidiaries, "results/company_analysis/prevalence_root_parents_and_subsidiaries.csv")
+
+```
+
+## Analyses by 'super genre'
+### NUMBER OF DISTINCT TRACKER COMPANIES PER APP
+```{r}
+#first describe the number of distinct tracker companies per app for family apps
+fam_count_company_refs <- count_tracker_companies %>%
+  left_join(apps, by = "id") %>%
+  filter(!is.na(family_genre)) %>%
+  mutate(super_genre = "Family")
+
+fam_summary_company_count <- fam_count_company_refs %>%
+  summarise(num_apps = n(),
+            median = median(num_companies),
+            Q1 = quantile(num_companies, .25),
+            Q3 = quantile(num_companies, .75),
+            mode = mode_func(num_companies),
+            min = min(num_companies),
+            max = max(num_companies),
+            IQR = IQR(num_companies),
+            mean_companies = round(mean(num_companies),1),
+            SD = round(sd(num_companies),2),
+            num_more_than_10 = sum(num_companies > 10),
+            pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
+            no_refs = sum(num_companies == 0),
+            pct_none = round((no_refs / num_apps) * 100,2)) %>%
+  select(-num_more_than_10, -no_refs) %>%
+  mutate(super_genre = "Family")
+
+```
+
+analyse overall
+
+```{r}
+#then describe the number of tracker companies per app by super genre, and add a row with the description for family apps to the output
+summary_company_count_by_super_genre_add_family <- count_tracker_companies %>%
+  left_join(apps, by = "id") %>% 
+  group_by(super_genre) %>% 
+  summarise(num_apps = n(),
+            median = median(num_companies),
+            Q1 = quantile(num_companies, .25),
+            Q3 = quantile(num_companies, .75),
+            mode = mode_func(num_companies),
+            min = min(num_companies),
+            max = max(num_companies),
+            IQR = IQR(num_companies),
+            mean_companies = round(mean(num_companies),1),
+            SD = round(sd(num_companies),2),
+            num_more_than_10 = sum(num_companies > 10),
+            pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
+            no_refs = sum(num_companies == 0),
+            pctNone = round((no_refs / num_apps) * 100,2)) %>%
+  select(-num_more_than_10, -no_refs) %>%
+  bind_rows(fam_summary_company_count) %>%
+  arrange(desc(median), desc(Q3), desc(pct_more_than_10))
+
+write_csv(summary_company_count_by_super_genre_add_family, "results/company_analysis/summary_company_count_by_super_genre_add_family.csv")
+
+```
+
+visualise number of companies
+
+```{r}
+#visualise this in a box plot
+count_tracker_companies %>%
+  left_join(apps, by = "id") %>%
+  bind_rows(fam_count_company_refs) %>%
+  mutate(super_genre = factor(super_genre,
+                              levels = c("Productivity & Tools","Communication & Social","Education","Health & Lifestyle","Music","Art & Photography","Games & Entertainment", "Family","News"), ordered = TRUE)) %>% 
+  ggplot(aes(y = num_companies, x = super_genre)) +
+  geom_boxplot(varwidth = TRUE, outlier.shape = NA) + 
+  labs(x = "Super genre", y = "Number of distinct tracker companies per app") +
+  scale_y_continuous(breaks = seq(0, 20, 4)) +
+  coord_flip(ylim = c(0,22)) +
+  theme_minimal()
+
+#ggsave("plots/boxNumCompaniesPerAppBySuperGenre.png",width=5, height=4, dpi=600)
+
+```
+
+
+### Percentage prevalence of tracker companies in apps
+```{r}
+#create function to count and save presence of leaf companies and lower-level companies in a super genre
+count_company_presence_subset_of_apps <- function(tag, apps_to_process){
+  app_hosts <- hosts %>% 
+    filter(id %in% apps_to_process$id) %>% 
+    filter(company != "unknown")
+  
+  company_prevalence <- app_hosts %>% 
+    distinct(id, company) %>% 
+    group_by(company) %>%
+    summarise(num_apps_referring = n()) %>% 
+    mutate(pct_of_apps = num_apps_referring / nrow(apps_to_process)) %>%
+    arrange(desc(pct_of_apps)) %>%
+    left_join(company_info, by = "company")
+  
+  #prevalence for root companies 
+  root_company_prevalence <- app_hosts %>% 
+    left_join(company_info) %>% 
+    distinct(id, leaf_parent) %>%
+    group_by(leaf_parent) %>%
+    summarise(num_apps_referring = n()) %>% 
+    mutate(pct_of_apps = num_apps_referring / nrow(apps_to_process)) %>%
+    arrange(desc(pct_of_apps))
+  
+  combined_prevalence <- root_company_prevalence %>%
+    select(-num_apps_referring) %>%
+    left_join(company_prevalence, by = "leaf_parent") %>%
+    select(-num_apps_referring, -root_parent) %>% 
+    rename(leaf_pct_of_apps = pct_of_apps.x,
+           individual_company_pct_of_apps = pct_of_apps.y)
+  
+  combined_prevalence %>% 
+    mutate(super_genre = tag)
+}
+
+```
+
+Ok, let's do it now for the ordinary super genres
+
+```{r}
+# split up the apps by super genre
+by_super_genre <- apps %>% 
+  split(.$super_genre)
+
+# create a vector with the names to save them with
+names_to_save <- names(by_super_genre) %>% 
+  str_to_lower() %>% 
+  str_replace_all(" ", "") %>% 
+  str_replace_all("&", "_") %>% 
+  str_c("company_prevalence_", .)
+
+map2_dfr(names(by_super_genre), by_super_genre, count_company_presence_subset_of_apps) %>% 
+  write_csv("results/company_analysis/by_super_genre_company_prevalence.csv")
+
+# do this separately for apps that are tagged with a family genre and bind rows
+
+```
+
+Let's do it one more time, just for apps that have been tagged as family apps.
+**NOTE**: this means that whereas the other super genres are exclusive, family apps are a cross-cutting subset.
+
+```{r}
+family_apps <- apps %>% 
+  filter(!is.na(family_genre))
+
+count_company_presence_subset_of_apps("Family", family_apps) %>% 
+  write_csv("results/company_analysis/family_company_prevalence.csv")
+
+```
+
+## Country prevalence
+### By app
+```{r}
+# counts in apps w/ known trackers
+country_counts_in_apps_with_known_trackers <- hosts %>%
+  filter(company != "unknown") %>%
+  left_join(company_info, by = "company") %>%
+  select(-c(country, root_parent)) %>% 
+  gather(key = subsidiary_level, value = company, -c(id, hosts)) %>%
+  left_join(company_info %>% select(-c(root_parent, leaf_parent)), by = "company") %>%
+  filter(!is.na(country), country != "", country != "N/A") %>% #exclude where we don't know what country is
+  group_by(id) %>%
+  distinct(country) %>%
+  summarise(num_countries = n()) %>%
+  arrange(desc(num_countries))
+
+#set country count to 0 for other apps and join together
+country_counts <- apps %>%
+  select(id) %>% 
+  anti_join(country_counts_in_apps_with_known_trackers) %>%
+  mutate(num_countries = 0) %>% 
+  bind_rows(country_counts_in_apps_with_known_trackers)
+
+```
+
+Ok, let's summarise, save out, and plot
+
+```{r}
+summary_country_counts <- country_counts %>%
+  summarise(num_apps = n(),
+            median = median(num_countries),
+            Q1 = quantile(num_countries, .25),
+            Q3 = quantile(num_countries, .75),
+            mode = mode_func(num_countries),
+            min = min(num_countries),
+            max = max(num_countries),
+            IQR = IQR(num_countries),
+            mean_companies = round(mean(num_countries),1),
+            SD = round(sd(num_countries),2),
+            num_more_than_10 = sum(num_countries > 10),
+            pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
+            no_refs = sum(num_countries == 0),
+            pct_none = round((no_refs / num_apps) * 100,2)) %>%
+  select(-num_more_than_10, -no_refs)
+
+write_csv(summary_country_counts,"results/country_analysis/country_summary.csv")
+
+country_counts %>%
+  ggplot() +
+  geom_histogram(aes(num_countries)) +
+  labs(x = "Number of countries", y = "Number of apps") +
+  scale_y_continuous(labels = comma) +
+  theme_minimal()
+```
+
+### By country
+```{r}
+#create function to break this down by the proportion of apps a given country is referred to via a tracker company being based there
+count_country_presence_subset_of_apps <- function(tag, apps_to_process){
+  app_hosts <- hosts %>% 
+    filter(id %in% apps_to_process$id) %>% 
+    filter(company != "unknown")
+  
+  app_hosts %>% 
+    left_join(company_info, by = "company") %>% 
+    select(-c(country, root_parent)) %>% 
+    pivot_longer(cols = c(company, leaf_parent), names_to = "subsidiary_level", values_to = "company") %>%
+    left_join(company_info %>% select(company, country)) %>% 
+  filter(!is.na(country), country != "", country != "N/A") %>% #exclude where we don't know what the country is
+  group_by(id) %>%
+  distinct(country) %>% #exclude the distinct countries within each app
+  ungroup() %>%
+  count(country) %>% #then count how many times a country occurs
+  mutate(pct_of_apps = round((n / nrow(apps_to_process))*100,2)) %>%
+  arrange(desc(n)) %>% 
+  mutate(super_genre = tag)
+  
+  #write_csv(count_country_presence_subset_of_apps, storage_location)
+}
+
+count_country_presence_subset_of_apps(tag = "all apps", apps) %>% 
+  write_csv("results/country_analysis/count_country_presence_subset_of_apps.csv")
+
+```
+
+
+### By super genre
+#### Summary stats of numbers of countries
+```{r}
+#first summarise number of countries in family apps
+family_apps_summary <- family_apps %>% 
+  left_join(country_counts) %>% 
+  summarise(num_apps = n(),
+            median = median(num_countries),
+            Q1 = quantile(num_countries, .25),
+            Q3 = quantile(num_countries, .75),
+            mode = mode_func(num_countries),
+            min = min(num_countries),
+            max = max(num_countries),
+            IQR = IQR(num_countries),
+            mean_countries = round(mean(num_countries),1),
+            SD = round(sd(num_countries),2),
+            num_more_than_10 = sum(num_countries > 10),
+            pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
+            no_refs = sum(num_countries == 0),
+            pct_none = round((no_refs / num_apps) * 100,2)) %>%
+  select(-num_more_than_10, -no_refs) %>%
+  mutate(super_genre = "Family")
+
+#then summarise number of countries by super genres, and add family row
+summary_country_count_by_super_genre_add_family <- country_counts %>%
+  left_join(apps, by = "id") %>% 
+  group_by(super_genre) %>%
+  summarise(num_apps = n(),
+            median = median(num_countries),
+            Q1 = quantile(num_countries, .25),
+            Q3 = quantile(num_countries, .75),
+            mode = mode_func(num_countries),
+            min = min(num_countries),
+            max = max(num_countries),
+            IQR = IQR(num_countries),
+            mean_countries = round(mean(num_countries),1),
+            SD = round(sd(num_countries),2),
+            num_more_than_10 = sum(num_countries > 10),
+            pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
+            no_refs = sum(num_countries == 0),
+            pct_none = round((no_refs / num_apps) * 100,2)) %>%
+  select(-num_more_than_10, -no_refs) %>%
+  bind_rows(family_apps_summary) %>%
+  arrange(desc(mean_countries))
+
+write_csv(summary_country_count_by_super_genre_add_family, "results/country_analysis/by_super_genre_add_family_summary_country_count.csv")
+
+```
+
+
+#### Country prevalence
+```{r}
+map2_dfr(names(by_super_genre), by_super_genre, count_country_presence_subset_of_apps) %>% 
+  write_csv("results/country_analysis/by_super_genre_count_country_presence.csv")
+
+# do it also for family apps
+count_country_presence_subset_of_apps(tag = "Family", family_apps) %>% 
+  write_csv("results/country_analysis/family_count_country_presence.csv")
+```
+
+
