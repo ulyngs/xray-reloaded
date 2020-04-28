@@ -39,21 +39,33 @@ company_info <- fromJSON("data/company_data_list_9_4_2018.json") %>%
 # read in our mapping of genres to super genres
 genre_grouping <- read_csv("data/genre_grouping.csv") %>% select(-numApps)
 
-# read in the apps and add the genre grouping
-apps <- read_csv("data/apps.csv") %>%
-  left_join(genre_grouping)
+mapping <- read_csv("data/mapping.csv")
 
-#apps <- read_csv("data/2017_study/appInfo.csv") %>%  # if you want to do the 2017 one
-#  left_join(genre_grouping)
+# read in the apps and add the genre grouping
+apps2020 <- read_csv("data/apps.csv") %>%
+  left_join(genre_grouping) %>% 
+  filter(id %in% mapping$id2020)
+
+apps2017 <- read_csv("data/2017_study/appInfo.csv") %>%  # if you want to do the 2017 one
+  left_join(genre_grouping) %>% 
+  filter(id %in% mapping$id2017)
 
 # read in the hosts mapped to company
 # NOTE: This assumes that you've already run used the code in the next section to do the mapping
-hosts <- vroom("data_processed/appsWithHostsAndCompaniesLong.csv")
+hosts2020 <- vroom("data_processed/appsWithHostsAndCompaniesLong.csv") %>%
+  filter(id %in% mapping$id2020)
 
 # if you want to run this with the 2017 data, then note that 'unknown' was in title case
 # so change it to lower case to get code to run correctly
-hosts <- vroom("data/2017_study/appsWithHostsAndCompaniesLong.csv") %>% 
-  mutate(company = ifelse(company == "Unknown", "unknown", company))
+hosts2017 <- vroom("data/2017_study/appsWithHostsAndCompaniesLong.csv") %>% 
+  mutate(company = ifelse(company == "Unknown", "unknown", company)) %>%
+  filter(id %in% mapping$id2017)
+
+apps <- apps2017
+hosts <- hosts2017
+
+apps <- apps2020
+hosts <- hosts2020
 
 ```
 
