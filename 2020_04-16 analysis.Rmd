@@ -7,7 +7,7 @@ editor_options:
 
 ```{r setup, include=FALSE}
 # -- OPTIONS --
-version <- '2020' # select the dataset you want to use
+version <- '2017' # select the dataset you want to use
 pairsOnly <- FALSE # only include apps that exist in both datasets
 
 library(tidyverse)
@@ -52,9 +52,7 @@ if (version == '2017') {
   # read in the apps and add the genre grouping
   apps <- vroom("data/2017_study/appInfo.csv") %>% 
     left_join(genre_grouping)
-  
-  # with the 2017 data, then note that 'unknown' was in title case
-  # so change it to lower case to get code to run correctly
+
   hosts <- vroom("data_processed/2017_hosts_and_companies_long.csv")
   
   if (pairsOnly) {
@@ -222,7 +220,7 @@ summary_tracker_hosts <- count_tracker_hosts %>%
             pct_none = round((no_refs / num_apps) * 100,2)) %>%
   select(-num_more_than_20, -no_refs)
 
-#write_csv(summary_tracker_hosts, "results/host_analysis/summary_tracker_hosts_per_app.csv")
+write_csv(summary_tracker_hosts, str_c("results/host_analysis/", version, "_summary_tracker_hosts_per_app.csv"))
 ```
 
 Great, now let's also get lorenz curve gini coefficient
@@ -263,7 +261,7 @@ known_trackers_info <- hosts %>%
 
 head(known_trackers_info, 250) %>%
   select(-leaf_parent) %>%
-  write_csv("results/host_analysis/top_250_tracker_hosts.csv")
+  write_csv(str_c("results/host_analysis/", version, "_top_250_tracker_hosts.csv"))
 
 #create summary of 'unknown' hosts (i.e. not on our tracker list) and save out top 250
 unknown_hosts_info <- hosts %>%
@@ -274,7 +272,7 @@ unknown_hosts_info <- hosts %>%
   arrange(desc(num_apps_present))
 
 head(unknown_hosts_info, 250) %>%
-  write_csv("results/host_analysis/top_250_unknown_hosts.csv")
+  write_csv(str_c("results/host_analysis/", version, "top_250_unknown_hosts.csv"))
 ```
 
 
@@ -297,7 +295,8 @@ apps_w_no_known_tracker_hosts <- apps %>%
 count_tracker_companies <- company_counts_in_apps_w_known_trackers %>% 
   bind_rows(apps_w_no_known_tracker_hosts)
 ```
-Ok, now we can calculate summary statistics
+
+Now we can calculate summary statistics
 
 ```{r}
 #calculate summary statistics of distinct tracker companies per app
@@ -318,7 +317,7 @@ summary_company_count <- count_tracker_companies %>%
             pct_none = round((no_refs / num_apps) * 100,2)) %>%
   select(-num_more_than_10, -no_refs)
 
-#write_csv(summary_company_count, "results/company_analysis/summary_company_count.csv")
+write_csv(summary_company_count, str_c("results/company_analysis/", version, "_summary_company_count.csv"))
 ```
 
 Explore inequality
@@ -335,13 +334,11 @@ count_tracker_companies %>%
   geom_histogram(aes(num_companies)) +
   labs(x = "Number of distinct companies per app", y = "Number of apps")
 
-#ggsave("plots/histTrackerCompaniesPerApp.png",width=5, height=4, dpi=600)
-
-#explore extreme outliers
-# count_tracker_companies %>%
-#  filter(num_companies > 27) %>%
-#  left_join(apps) %>%
-#  write_csv("results/outliers/extreme_outliers_NumCompanies.csv")
+# explore extreme outliers
+count_tracker_companies %>%
+ filter(num_companies > 27) %>%
+ left_join(apps) %>%
+ write_csv(str_c("results/company_analysis/", version, "_extreme_outliers_NumCompanies.csv"))
 
 ```
 
@@ -375,7 +372,7 @@ prevalence_owners_and_subsidiaries <- prevalence_of_root_companies %>%
   rename(pct_of_apps_leaf_parent = pct_of_apps.x,
          pct_of_apps_leaf_company = pct_of_apps.y)
 
-write_csv(prevalence_owners_and_subsidiaries, "results/company_analysis/prevalence_root_parents_and_subsidiaries.csv")
+write_csv(prevalence_owners_and_subsidiaries, str_c("results/company_analysis/", version, "_prevalence_root_parents_and_subsidiaries.csv"))
 
 ```
 
@@ -433,7 +430,7 @@ summary_company_count_by_super_genre_add_family <- count_tracker_companies %>%
   bind_rows(fam_summary_company_count) %>%
   arrange(desc(median), desc(Q3), desc(pct_more_than_10))
 
-write_csv(summary_company_count_by_super_genre_add_family, "results/company_analysis/summary_company_count_by_super_genre_add_family.csv")
+write_csv(summary_company_count_by_super_genre_add_family, str_c("results/company_analysis/", version, "_summary_company_count_by_super_genre_add_family.csv"))
 
 ```
 
@@ -452,8 +449,6 @@ count_tracker_companies %>%
   scale_y_continuous(breaks = seq(0, 20, 4)) +
   coord_flip(ylim = c(0,22)) +
   theme_minimal()
-
-#ggsave("plots/boxNumCompaniesPerAppBySuperGenre.png",width=5, height=4, dpi=600)
 
 ```
 
@@ -503,15 +498,8 @@ Ok, let's do it now for the ordinary super genres
 by_super_genre <- apps %>% 
   split(.$super_genre)
 
-# create a vector with the names to save them with
-names_to_save <- names(by_super_genre) %>% 
-  str_to_lower() %>% 
-  str_replace_all(" ", "") %>% 
-  str_replace_all("&", "_") %>% 
-  str_c("company_prevalence_", .)
-
 map2_dfr(names(by_super_genre), by_super_genre, count_company_presence_subset_of_apps) %>% 
-  write_csv("results/company_analysis/by_super_genre_company_prevalence.csv")
+  write_csv(str_c("results/company_analysis/", version, "_by_super_genre_company_prevalence.csv"))
 
 # do this separately for apps that are tagged with a family genre and bind rows
 
@@ -525,7 +513,7 @@ family_apps <- apps %>%
   filter(!is.na(family_genre))
 
 count_company_presence_subset_of_apps("Family", family_apps) %>% 
-  write_csv("results/company_analysis/family_company_prevalence.csv")
+  write_csv(str_c("results/company_analysis/", version, "_family_company_prevalence.csv"))
 
 ```
 
@@ -574,7 +562,7 @@ summary_country_counts <- country_counts %>%
             pct_none = round((no_refs / num_apps) * 100,2)) %>%
   select(-num_more_than_10, -no_refs)
 
-write_csv(summary_country_counts,"results/country_analysis/country_summary.csv")
+write_csv(summary_country_counts, str_c("results/country_analysis/", version, "_country_summary.csv"))
 
 country_counts %>%
   ggplot() +
@@ -605,12 +593,10 @@ count_country_presence_subset_of_apps <- function(tag, apps_to_process){
   mutate(pct_of_apps = round((n / nrow(apps_to_process))*100,2)) %>%
   arrange(desc(n)) %>% 
   mutate(super_genre = tag)
-  
-  #write_csv(count_country_presence_subset_of_apps, storage_location)
 }
 
 count_country_presence_subset_of_apps(tag = "all apps", apps) %>% 
-  write_csv("results/country_analysis/count_country_presence_subset_of_apps.csv")
+  write_csv(str_c("results/country_analysis/", version, "_count_country_presence_subset_of_apps.csv"))
 
 ```
 
@@ -660,7 +646,7 @@ summary_country_count_by_super_genre_add_family <- country_counts %>%
   bind_rows(family_apps_summary) %>%
   arrange(desc(mean_countries))
 
-write_csv(summary_country_count_by_super_genre_add_family, "results/country_analysis/by_super_genre_add_family_summary_country_count.csv")
+write_csv(summary_country_count_by_super_genre_add_family, str_c("results/country_analysis/", version, "_by_super_genre_add_family_summary_country_count.csv"))
 
 ```
 
@@ -668,11 +654,11 @@ write_csv(summary_country_count_by_super_genre_add_family, "results/country_anal
 #### Country prevalence
 ```{r}
 map2_dfr(names(by_super_genre), by_super_genre, count_country_presence_subset_of_apps) %>% 
-  write_csv("results/country_analysis/by_super_genre_count_country_presence.csv")
+  write_csv(str_c("results/country_analysis/", version, "_by_super_genre_count_country_presence.csv"))
 
 # do it also for family apps
 count_country_presence_subset_of_apps(tag = "Family", family_apps) %>% 
-  write_csv("results/country_analysis/family_count_country_presence.csv")
+  write_csv(str_c("results/country_analysis/", version, "_family_count_country_presence.csv"))
 ```
 
 
