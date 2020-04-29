@@ -7,14 +7,15 @@ editor_options:
 
 ```{r setup, include=FALSE}
 # -- OPTIONS --
-version = '2017' # select the dataset you want to use
-pairsOnly = FALSE # only include apps that exist in both datasets
+version <- '2020' # select the dataset you want to use
+pairsOnly <- FALSE # only include apps that exist in both datasets
 
 library(tidyverse)
 library(jsonlite)
 library(ineq)
 library(scales)
 library(vroom)
+library(lubridate)
 
 #create function to calculate modal value
 mode_func <- function(x) {
@@ -54,8 +55,7 @@ if (version == '2017') {
   
   # with the 2017 data, then note that 'unknown' was in title case
   # so change it to lower case to get code to run correctly
-  hosts <- vroom("data/2017_study/appsWithHostsAndCompaniesLong.csv") %>% 
-    mutate(company = ifelse(company == "Unknown", "unknown", company))
+  hosts <- vroom("data_processed/2017_hosts_and_companies_long.csv")
   
   if (pairsOnly) {
     apps <- apps %>% 
@@ -65,12 +65,12 @@ if (version == '2017') {
   }
 } else {
   # read in the apps and add the genre grouping
-  apps <- vroom("data/apps.csv") %>%
+  apps <- vroom("data/xray/apps_all.csv") %>%
     left_join(genre_grouping)
   
   # read in the hosts mapped to company
   # NOTE: This assumes that you've already run used the code in the next section to do the mapping
-  hosts <- vroom("data_processed/appsWithHostsAndCompaniesLong.csv")
+  hosts <- vroom("data_processed/2020_hosts_and_companies_long.csv")
   
   if (pairsOnly) {
     apps <- apps %>% 
@@ -86,18 +86,20 @@ if (version == '2017') {
 ## Map hosts to companies
 The code below will iterate over each of the domains that we have associated with a tracker company in the JSON file with company domains, and search for a match in the domains our analyser has identified within the apps.
 
-It will save out a CSV file called appsWithHostsAndCompaniesLong with three columns: app id, domains ('hosts'), and company. 
-Each row represents one domain identified in an app, so each app has as many rows in there as it has domains.
+It will save out a CSV file with three columns: app id, domains ('hosts'), and company. 
+Each row represents one domain identified in an app, so each app has as many rows in there as it has domains (tidy format).
 The company column is 'unknown' if the domain has no match in our JSON of tracker domains.
 
-Note that the chunk option `eval=FALSE` means that this chunk will not be evaluated if you knit this document.
-That is because this mapping takes a long time - if you do the full mapping with ~1m apps, then it'll take something like 6-10 hours on a high-end laptop.
-There's probably an efficient way to do this as a simple left-join, but the current implementation is an iterative search which is probably less error-prone.
-
+The chunk option `eval=FALSE` means this chunk won't be evaluated if you knit this document.
 
 ```{r, eval=FALSE}
-hosts <- read_csv("data/hosts.csv") %>% 
-  mutate(company = "unknown")
+if (version == '2017') {
+  hosts <- vroom("data/2017_study/hosts.csv") %>% 
+    mutate(company = "unknown")
+} else {
+  hosts <- vroom("data/xray/hosts_all.csv") %>% 
+    mutate(company = "unknown")
+}
 
 #unnest hosts in company info and arrange by length, so that we start with the longest domain names when doing the mapping
 company_domains <- fromJSON("data/company_data_list_9_4_2018.json") %>%
@@ -113,11 +115,10 @@ company_domains <- company_domains %>%
   mutate(regex = str_replace(domains, "\\.", "\\\\.")) %>% #make the dot into a regex
   mutate(regex = str_c("(^|\\.)", regex, "([^ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz\\.]?)")) #domain either starts here or is preceded by dot; does not end in alphabetic character or dot
 
-#then do the matching - WARNING! WITH HUNDREDS OF THOUSANDS OF APPS, THIS TAKES HOURS
-
-uniqueHosts = hosts[!duplicated(hosts$hosts), ]
-hostsTmp = hosts
-hosts = uniqueHosts
+uniqueHosts <- hosts %>% 
+  distinct(hosts, company)
+hostsTmp <- hosts
+hosts <- uniqueHosts
 
 for (i in 1:nrow(company_domains)) {
   #print(paste("checking domain", company_domains[[i,"domains"]], "with regex", company_domains[[i,"regex"]]))
@@ -131,10 +132,15 @@ for (i in 1:nrow(company_domains)) {
   print(paste(i, "out of", nrow(company_domains), "complete"))
 }
 
-lookup <- data.frame(company = hosts$company, row.names = hosts$hosts)
-hosts <- hostsTmp %>%  mutate(company = lookup[hosts, ])
+lookup <- data.frame(
+  company = hosts %>% filter(!is.na(hosts)) %>% pull(company), 
+  row.names = hosts %>% filter(!is.na(hosts)) %>% pull(hosts)
+)
 
-write_csv(hosts, "data_processed/appsWithHostsAndCompaniesLong.csv")
+hosts <- hostsTmp %>% 
+  mutate(company = lookup[hosts, ])
+
+write_csv(hosts, str_c("data_processed/", version, "_hosts_and_companies_long.csv"))
 
 ```
 
