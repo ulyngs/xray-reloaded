@@ -27,6 +27,8 @@ dir.create("results/company_analysis")
 dir.create("results/country_analysis")
 dir.create("results/host_analysis")
 
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
 ```
 
 
