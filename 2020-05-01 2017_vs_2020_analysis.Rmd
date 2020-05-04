@@ -12,6 +12,7 @@ library(ineq)
 library(scales)
 library(vroom)
 library(lubridate)
+library(knitr)
 
 #create function to calculate modal value
 mode_func <- function(x) {
@@ -66,7 +67,8 @@ hosts <- hosts_2017 %>%
 ```
 
 # Main analysis
-## Summary statistics of hosts / domains that are associated with tracker companies
+## Number of hosts / domains that are associated with tracker companies
+Summary stats
 ```{r}
 # count tracker hosts
 count_tracker_hosts <- hosts %>% 
@@ -101,16 +103,17 @@ count_tracker_hosts %>%
             pct_more_than_20 = round((num_more_than_20 / num_apps) * 100,2),
             no_refs = sum(num_tracker_hosts == 0),
             pct_none = round((no_refs / num_apps) * 100,2)) %>%
-  select(-num_more_than_20, -no_refs)
+  select(-num_more_than_20, -no_refs) %>% 
+  knitr::kable()
 
 ```
 
-Great, now let's also get lorenz curve gini coefficient
-
+Gini coefficient
 ```{r}
 count_tracker_hosts %>% 
   group_by(crawl) %>% 
-  summarise("Gini coefficient" = ineq(num_tracker_hosts, type = 'Gini'))
+  summarise("Gini coefficient" = ineq(num_tracker_hosts, type = 'Gini')) %>% 
+  knitr::kable()
 
 #plot the distribution in a histogram
 count_tracker_hosts %>%
@@ -202,8 +205,7 @@ count_tracker_companies <- company_counts_in_apps_w_known_trackers %>%
 
 ```
 
-Now we can calculate summary statistics
-
+Calculate summary statistics
 ```{r}
 #calculate summary statistics of distinct tracker companies per app
 count_tracker_companies %>%
@@ -222,16 +224,18 @@ count_tracker_companies %>%
             pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
             no_refs = sum(num_companies == 0),
             pct_none = round((no_refs / num_apps) * 100,2)) %>%
-  select(-num_more_than_10, -no_refs)
+  select(-num_more_than_10, -no_refs) %>% 
+  knitr::kable()
 
 ```
 
-Explore inequality
+Gini coefficient
 
 ```{r}
 count_tracker_companies %>% 
   group_by(crawl) %>% 
-  summarise("Gini coefficient" = ineq(num_companies, type = 'Gini'))
+  summarise("Gini coefficient" = ineq(num_companies, type = 'Gini')) %>% 
+  knitr::kable()
 
 #plot the distribution in a histogram
 count_tracker_companies %>% 
@@ -252,13 +256,14 @@ count_tracker_companies %>%
 
 ```
 
-### Outliers (companies w/ more than 30 )
+### Outliers (w/ more than 30 companies)
 ```{r}
 # explore extreme outliers
 count_tracker_companies %>%
   filter(num_companies > 30) %>%
   left_join(apps) %>%
-  arrange(desc(num_companies))
+  arrange(desc(num_companies)) %>% 
+  DT::datatable()
 ```
 
 
@@ -369,10 +374,11 @@ count_tracker_companies %>%
             num_more_than_10 = sum(num_companies > 10),
             pct_more_than_10 = round((num_more_than_10 / num_apps) * 100,2),
             no_refs = sum(num_companies == 0),
-            pctNone = round((no_refs / num_apps) * 100,2)) %>% 
+            pct_none = round((no_refs / num_apps) * 100,2)) %>% 
   select(-num_more_than_10, -no_refs) %>% 
   bind_rows(fam_summary_company_count) %>%
-  arrange(desc(median), desc(Q3), desc(pct_more_than_10), desc(crawl))
+  arrange(desc(median), desc(Q3), desc(pct_more_than_10), desc(crawl)) %>% 
+  DT::datatable()
 
 
 ```
