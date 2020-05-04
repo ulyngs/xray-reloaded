@@ -50,7 +50,10 @@ mapping <- vroom("data/mapping.csv")
 
 if (version == '2017') {
   # read in the apps and add the genre grouping
-  apps <- vroom("data/2017_study/appInfo.csv") %>% 
+  apps <- vroom("data/2017_study/appInfo.csv", 
+                   col_types = list(col_integer(), 
+                                    col_character(), 
+                                    col_character())) %>% 
     left_join(genre_grouping)
 
   hosts <- vroom("data_processed/2017_hosts_and_companies_long.csv")
